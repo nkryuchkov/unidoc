@@ -69,7 +69,7 @@ func newEncoderFromInlineImage(inlineImage *ContentStreamInlineImage) (core.Stre
 	case "LZW", "LZWDecode":
 		return newLZWEncoderFromInlineImage(inlineImage, nil)
 	case "CCF", "CCITTFaxDecode":
-		return core.NewCCITTFaxEncoder(), nil
+		return newCCITTFaxEncoderFromInlineImage(inlineImage, nil)
 	case "RL", "RunLengthDecode":
 		return core.NewRunLengthEncoder(), nil
 	default:
@@ -299,6 +299,97 @@ func newDCTEncoderFromInlineImage(inlineImage *ContentStreamInlineImage) (*core.
 	return encoder, nil
 }
 
+// Create a new CCITTFax decoder from an inline image object, getting all the encoding parameters
+// from the DecodeParms stream object dictionary entry that can be provided optionally, usually
+// only when a multi filter is used.
+func newCCITTFaxEncoderFromInlineImage(inlineImage *ContentStreamInlineImage, decodeParams *core.PdfObjectDictionary) (*core.CCITTFaxEncoder, error) {
+	encoder := core.NewCCITTFaxEncoder()
+
+	// If decodeParams not provided, see if we can get from the stream.
+	if decodeParams == nil {
+		obj := inlineImage.DecodeParms
+		if obj != nil {
+			dp, isDict := obj.(*core.PdfObjectDictionary)
+			if !isDict {
+				common.Log.Debug("Error: DecodeParms not a dictionary (%T)", obj)
+				return nil, fmt.Errorf("Invalid DecodeParms")
+			}
+			decodeParams = dp
+		}
+	}
+	if decodeParams == nil {
+		// Can safely return here if no decode params, as the following depend on the decode params.
+		return encoder, nil
+	}
+
+	obj := decodeParams.Get("Width")
+	if obj != nil {
+		width, ok := obj.(*core.PdfObjectInteger)
+		if !ok {
+			return nil, fmt.Errorf("Width is invalid")
+		}
+
+		encoder.Width = int(*width)
+	}
+
+	obj = decodeParams.Get("Height")
+	if obj != nil {
+		height, ok := obj.(*core.PdfObjectInteger)
+		if !ok {
+			return nil, fmt.Errorf("Height is invalid")
+		}
+
+		encoder.Height = int(*height)
+	}
+
+	obj = decodeParams.Get("K")
+	if obj != nil {
+		k, ok := obj.(*core.PdfObjectInteger)
+		if !ok {
+			return nil, fmt.Errorf("K is invalid")
+		}
+
+		encoder.Mode = core.IntToCCITTMode(int(*k))
+	}
+
+	obj = decodeParams.Get("Columns")
+	if obj != nil {
+		columns, ok := obj.(*core.PdfObjectInteger)
+		if !ok {
+			return nil, fmt.Errorf("Columns is invalid")
+		}
+
+		encoder.Columns = int(*columns)
+	}
+
+	obj = decodeParams.Get("BlackIs1")
+	if obj != nil {
+		inverse, ok := obj.(*core.PdfObjectInteger)
+		if !ok {
+			return nil, fmt.Errorf("BlackIs1 is invalid")
+		}
+
+		if int(*inverse) == 1 {
+			encoder.Inverse = true
+		}
+	}
+
+	obj = decodeParams.Get("EncodedByteAlign")
+	if obj != nil {
+		align, ok := obj.(*core.PdfObjectInteger)
+		if !ok {
+			return nil, fmt.Errorf("EncodedByteAlign is invalid")
+		}
+
+		if int(*align) == 1 {
+			encoder.Align = true
+		}
+	}
+
+	common.Log.Trace("decode params: %s", decodeParams.String())
+	return encoder, nil
+}
+
 // Create a new multi-filter encoder/decoder based on an inline image, getting all the encoding parameters
 // from the filter specification and the DecodeParms (DP) dictionaries.
 func newMultiEncoderFromInlineImage(inlineImage *ContentStreamInlineImage) (*core.MultiEncoder, error) {
@@ -383,6 +474,12 @@ func newMultiEncoderFromInlineImage(inlineImage *ContentStreamInlineImage) (*cor
 			mencoder.AddEncoder(encoder)
 		} else if *name == core.StreamEncodingFilterNameASCII85 || *name == "A85" {
 			encoder := core.NewASCII85Encoder()
+			mencoder.AddEncoder(encoder)
+		} else if *name == core.StreamEncodingFilterNameCCITTFax || *name == "CCF" {
+			encoder, err := newCCITTFaxEncoderFromInlineImage(inlineImage, dParams)
+			if err != nil {
+				return nil, err
+			}
 			mencoder.AddEncoder(encoder)
 		} else {
 			common.Log.Error("Unsupported filter %s", *name)

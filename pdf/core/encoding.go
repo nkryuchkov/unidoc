@@ -1527,7 +1527,39 @@ func (this *RawEncoder) EncodeBytes(data []byte) ([]byte, error) {
 //
 // CCITTFax encoder/decoder (dummy, for now)
 //
-type CCITTFaxEncoder struct{}
+type CCITTFaxEncoder struct {
+	Width   int
+	Height  int
+	Mode    CCITTMode
+	Columns int
+	Inverse bool
+	Align   bool
+}
+
+type CCITTMode int
+
+const (
+	GroupUnknown CCITTMode = iota
+	Group3
+	Group4
+	GroupMixed
+)
+
+// <0 : Pure two-dimensional encoding (Group 4)
+// =0 : Pure one-dimensional encoding (Group 3, 1-D)
+// >0 : Mixed one- and two-dimensional encoding (Group 3, 2-D)
+func IntToCCITTMode(v int) CCITTMode {
+	switch {
+	case v == 0:
+		return Group3
+	case v < 0:
+		return Group4
+	case v > 0:
+		return GroupMixed
+	default:
+		return GroupUnknown
+	}
+}
 
 func NewCCITTFaxEncoder() *CCITTFaxEncoder {
 	return &CCITTFaxEncoder{}
@@ -1538,12 +1570,128 @@ func (this *CCITTFaxEncoder) GetFilterName() string {
 }
 
 func (this *CCITTFaxEncoder) MakeDecodeParams() PdfObject {
-	return nil
+	decodeParams := MakeDict()
+	decodeParams.Set("K", MakeInteger(int64(this.Mode)))
+	decodeParams.Set("Columns", MakeInteger(int64(this.Columns)))
+	decodeParams.Set("BlackIs1", MakeBool(this.Inverse))
+	decodeParams.Set("EncodedByteAlign", MakeBool(this.Align))
+
+	return decodeParams
 }
 
 // Make a new instance of an encoding dictionary for a stream object.
 func (this *CCITTFaxEncoder) MakeStreamDict() *PdfObjectDictionary {
-	return MakeDict()
+	dict := MakeDict()
+	dict.Set("Filter", MakeName(this.GetFilterName()))
+
+	decodeParams := this.MakeDecodeParams()
+	if decodeParams != nil {
+		dict.Set("DecodeParms", decodeParams)
+	}
+
+	dict.Set("Width", MakeInteger(int64(this.Width)))
+	dict.Set("Height", MakeInteger(int64(this.Height)))
+
+	return dict
+}
+
+// Create a new CCITTFax decoder from a stream object, getting all the encoding parameters
+// from the DecodeParms stream object dictionary entry.
+func newCCITTFaxEncoderFromStream(streamObj *PdfObjectStream, decodeParams *PdfObjectDictionary) (*CCITTFaxEncoder, error) {
+	encoder := NewCCITTFaxEncoder()
+
+	encDict := streamObj.PdfObjectDictionary
+	if encDict == nil {
+		// No encoding dictionary.
+		return encoder, nil
+	}
+
+	// If decodeParams not provided, see if we can get from the stream.
+	if decodeParams == nil {
+		obj := encDict.Get("DecodeParms")
+		if obj != nil {
+			if dp, isDict := obj.(*PdfObjectDictionary); isDict {
+				decodeParams = dp
+			} else if a, isArr := obj.(*PdfObjectArray); isArr {
+				if len(*a) == 1 {
+					if dp, isDict := (*a)[0].(*PdfObjectDictionary); isDict {
+						decodeParams = dp
+					}
+				}
+			}
+			if decodeParams == nil {
+				common.Log.Error("DecodeParms not a dictionary %#v", obj)
+				return nil, fmt.Errorf("Invalid DecodeParms")
+			}
+		}
+	}
+
+	obj := encDict.Get("Width")
+	if obj != nil {
+		width, ok := obj.(*PdfObjectInteger)
+		if !ok {
+			return nil, fmt.Errorf("Width is invalid")
+		}
+
+		encoder.Width = int(*width)
+	}
+
+	obj = encDict.Get("Height")
+	if obj != nil {
+		height, ok := obj.(*PdfObjectInteger)
+		if !ok {
+			return nil, fmt.Errorf("Height is invalid")
+		}
+
+		encoder.Height = int(*height)
+	}
+
+	obj = decodeParams.Get("K")
+	if obj != nil {
+		k, ok := obj.(*PdfObjectInteger)
+		if !ok {
+			return nil, fmt.Errorf("K is invalid")
+		}
+
+		encoder.Mode = IntToCCITTMode(int(*k))
+	}
+
+	obj = decodeParams.Get("Columns")
+	if obj != nil {
+		columns, ok := obj.(*PdfObjectInteger)
+		if !ok {
+			return nil, fmt.Errorf("Columns is invalid")
+		}
+
+		encoder.Columns = int(*columns)
+	}
+
+	obj = decodeParams.Get("BlackIs1")
+	if obj != nil {
+		inverse, ok := obj.(*PdfObjectInteger)
+		if !ok {
+			return nil, fmt.Errorf("BlackIs1 is invalid")
+		}
+
+		if int(*inverse) == 1 {
+			encoder.Inverse = true
+		}
+	}
+
+	obj = decodeParams.Get("EncodedByteAlign")
+	if obj != nil {
+		align, ok := obj.(*PdfObjectInteger)
+		if !ok {
+			return nil, fmt.Errorf("EncodedByteAlign is invalid")
+		}
+
+		if int(*align) == 1 {
+			encoder.Align = true
+		}
+	}
+
+	common.Log.Trace("decode params: %s", decodeParams.String())
+	return encoder, nil
 }
 
 func (this *CCITTFaxEncoder) DecodeBytes(encoded []byte) ([]byte, error) {
@@ -1741,6 +1889,12 @@ func newMultiEncoderFromStream(streamObj *PdfObjectStream) (*MultiEncoder, error
 			mencoder.AddEncoder(encoder)
 		} else if *name == StreamEncodingFilterNameASCII85 {
 			encoder := NewASCII85Encoder()
+			mencoder.AddEncoder(encoder)
+		} else if *name == StreamEncodingFilterNameCCITTFax {
+			encoder, err := newCCITTFaxEncoderFromStream(streamObj, dParams)
+			if err != nil {
+				return nil, err
+			}
 			mencoder.AddEncoder(encoder)
 		} else if *name == StreamEncodingFilterNameDCT {
 			encoder, err := newDCTEncoderFromStream(streamObj, mencoder)

@@ -27,6 +27,9 @@ import (
 	gocolor "image/color"
 	"image/jpeg"
 	"io"
+	"io/ioutil"
+
+	"github.com/hhrutter/pdfcpu/ccitt"
 
 	// Need two slightly different implementations of LZW (EarlyChange parameter).
 	lzw0 "compress/lzw"
@@ -1539,11 +1542,24 @@ type CCITTFaxEncoder struct {
 type CCITTMode int
 
 const (
-	GroupUnknown CCITTMode = iota
-	Group3
+	Group3 CCITTMode = iota
 	Group4
 	GroupMixed
+	GroupUnknown
 )
+
+func (mode CCITTMode) String() string {
+	switch mode {
+	case Group3:
+		return "Group 3"
+	case Group4:
+		return "Group 4"
+	case GroupMixed:
+		return "Mixed"
+	default:
+		return "Unknown"
+	}
+}
 
 // <0 : Pure two-dimensional encoding (Group 4)
 // =0 : Pure one-dimensional encoding (Group 3, 1-D)
@@ -1695,12 +1711,18 @@ func newCCITTFaxEncoderFromStream(streamObj *PdfObjectStream, decodeParams *PdfO
 }
 
 func (this *CCITTFaxEncoder) DecodeBytes(encoded []byte) ([]byte, error) {
-	common.Log.Debug("Error: Attempting to use unsupported encoding %s", this.GetFilterName())
-	return encoded, ErrNoCCITTFaxDecode
+	if this.Mode == GroupMixed {
+		return encoded, ErrNoCCITTFaxDecode
+	}
+	mode := ccitt.Group3
+	if this.Mode == Group4 {
+		mode = ccitt.Group4
+	}
+	reader := ccitt.NewReader(bytes.NewBuffer(encoded), mode, this.Columns, this.Inverse, this.Align)
+	return ioutil.ReadAll(reader)
 }
 
 func (this *CCITTFaxEncoder) DecodeStream(streamObj *PdfObjectStream) ([]byte, error) {
-	common.Log.Debug("Error: Attempting to use unsupported encoding %s", this.GetFilterName())
 	return streamObj.Stream, ErrNoCCITTFaxDecode
 }
 

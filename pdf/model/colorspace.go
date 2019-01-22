@@ -281,6 +281,12 @@ func (this *PdfColorspaceDeviceGray) ColorToRGB(color PdfColor) (PdfColor, error
 
 // Convert 1-component grayscale data to 3-component RGB.
 func (this *PdfColorspaceDeviceGray) ImageToRGB(img Image) (Image, error) {
+	// ImageToRGB, applied to grayscale images, breaks them. Using temporary workaround.
+	// TODO: fix breaking grayscale images.
+	if img.ColorComponents == 1 {
+		return img, nil
+	}
+
 	rgbImage := img
 
 	samples := img.GetSamples()

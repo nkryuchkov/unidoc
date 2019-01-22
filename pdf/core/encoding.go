@@ -27,15 +27,13 @@ import (
 	gocolor "image/color"
 	"image/jpeg"
 	"io"
-	"io/ioutil"
-
-	"github.com/hhrutter/pdfcpu/ccitt"
 
 	// Need two slightly different implementations of LZW (EarlyChange parameter).
 	lzw0 "compress/lzw"
 
 	lzw1 "golang.org/x/image/tiff/lzw"
 
+	ccittfaxdecode "github.com/plaisted/CCITTFaxDecode"
 	"github.com/unidoc/unidoc/common"
 )
 
@@ -1654,12 +1652,21 @@ func newCCITTFaxEncoderFromStream(streamObj *PdfObjectStream, decodeParams *PdfO
 
 	obj = encDict.Get("Height")
 	if obj != nil {
-		height, ok := obj.(*PdfObjectInteger)
-		if !ok {
+		switch height := obj.(type) {
+		case *PdfObjectInteger:
+			if height != nil {
+				encoder.Height = int(*height)
+			}
+		case *PdfIndirectObject:
+			intObj, ok := height.PdfObject.(*PdfObjectInteger)
+			if ok && intObj != nil {
+				encoder.Height = int(*intObj)
+			}
+
+		default:
+			common.Log.Trace("Height type: %T", obj)
 			return nil, fmt.Errorf("Height is invalid")
 		}
-
-		encoder.Height = int(*height)
 	}
 
 	obj = decodeParams.Get("K")
@@ -1668,10 +1675,12 @@ func newCCITTFaxEncoderFromStream(streamObj *PdfObjectStream, decodeParams *PdfO
 		if !ok {
 			return nil, fmt.Errorf("K is invalid")
 		}
+		fmt.Printf("K = %v\n", *k)
 
 		encoder.Mode = IntToCCITTMode(int(*k))
 	}
 
+	encoder.Columns = 1728
 	obj = decodeParams.Get("Columns")
 	if obj != nil {
 		columns, ok := obj.(*PdfObjectInteger)
@@ -1684,25 +1693,27 @@ func newCCITTFaxEncoderFromStream(streamObj *PdfObjectStream, decodeParams *PdfO
 
 	obj = decodeParams.Get("BlackIs1")
 	if obj != nil {
-		inverse, ok := obj.(*PdfObjectInteger)
-		if !ok {
+		switch inverse := obj.(type) {
+		case *PdfObjectInteger:
+			encoder.Inverse = inverse != nil && *inverse > 0
+		case *PdfObjectBool:
+			encoder.Inverse = inverse != nil && bool(*inverse)
+		default:
+			common.Log.Trace("BlackIs1 type: %T", obj)
 			return nil, fmt.Errorf("BlackIs1 is invalid")
-		}
-
-		if int(*inverse) == 1 {
-			encoder.Inverse = true
 		}
 	}
 
 	obj = decodeParams.Get("EncodedByteAlign")
 	if obj != nil {
-		align, ok := obj.(*PdfObjectInteger)
-		if !ok {
+		switch align := obj.(type) {
+		case *PdfObjectInteger:
+			encoder.Align = align != nil && *align > 0
+		case *PdfObjectBool:
+			encoder.Align = align != nil && bool(*align)
+		default:
+			common.Log.Trace("EncodedByteAlign type: %T", obj)
 			return nil, fmt.Errorf("EncodedByteAlign is invalid")
-		}
-
-		if int(*align) == 1 {
-			encoder.Align = true
 		}
 	}
 
@@ -1711,19 +1722,20 @@ func newCCITTFaxEncoderFromStream(streamObj *PdfObjectStream, decodeParams *PdfO
 }
 
 func (this *CCITTFaxEncoder) DecodeBytes(encoded []byte) ([]byte, error) {
-	if this.Mode == GroupMixed {
-		return encoded, ErrNoCCITTFaxDecode
+	arr, err := ccittfaxdecode.NewCCITTFaxDecoder(uint(this.Columns), encoded).Decode()
+	if err != nil {
+		return nil, err
 	}
-	mode := ccitt.Group3
-	if this.Mode == Group4 {
-		mode = ccitt.Group4
+	result := make([]byte, 0)
+	for i := range arr {
+		result = append(result, arr[i]...)
 	}
-	reader := ccitt.NewReader(bytes.NewBuffer(encoded), mode, this.Columns, this.Inverse, this.Align)
-	return ioutil.ReadAll(reader)
+
+	return result, nil
 }
 
 func (this *CCITTFaxEncoder) DecodeStream(streamObj *PdfObjectStream) ([]byte, error) {
-	return streamObj.Stream, ErrNoCCITTFaxDecode
+	return this.DecodeBytes(streamObj.Stream)
 }
 
 func (this *CCITTFaxEncoder) EncodeBytes(data []byte) ([]byte, error) {

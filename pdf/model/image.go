@@ -11,7 +11,6 @@ import (
 	gocolor "image/color"
 	"image/draw"
 	_ "image/gif"
-	_ "image/png"
 	"io"
 
 	"github.com/unidoc/unidoc/common"
@@ -133,7 +132,6 @@ func (this *Image) ToGoImage() (goimage.Image, error) {
 	common.Log.Trace("Converting to go image")
 	bounds := goimage.Rect(0, 0, int(this.Width), int(this.Height))
 	var img DrawableImage
-
 	if this.ColorComponents == 1 {
 		if this.BitsPerComponent == 16 {
 			img = goimage.NewGray16(bounds)
@@ -159,7 +157,18 @@ func (this *Image) ToGoImage() (goimage.Image, error) {
 	y := 0
 	aidx := 0
 
-	samples := this.GetSamples()
+	// When an image is grayscale, the result of this.GetSamples() is a totally black image.
+	// Removing the call seems to work fine.
+	// TODO: check if this doesn't break anything
+	samples := make([]uint32, 0, len(this.Data))
+	if this.ColorComponents == 1 {
+		for _, v := range this.Data {
+			samples = append(samples, uint32(v))
+		}
+	} else {
+		samples = this.GetSamples()
+	}
+
 	//bytesPerColor := colorComponents * int(this.BitsPerComponent) / 8
 	bytesPerColor := this.ColorComponents
 	for i := 0; i+bytesPerColor-1 < len(samples); i += bytesPerColor {

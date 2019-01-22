@@ -352,6 +352,7 @@ func newCCITTFaxEncoderFromInlineImage(inlineImage *ContentStreamInlineImage, de
 		encoder.Mode = core.IntToCCITTMode(int(*k))
 	}
 
+	encoder.Columns = 1728
 	obj = decodeParams.Get("Columns")
 	if obj != nil {
 		columns, ok := obj.(*core.PdfObjectInteger)
